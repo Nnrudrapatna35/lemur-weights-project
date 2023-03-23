@@ -1,0 +1,306 @@
+---
+title: "Analyzing the Weight of Lemurs"
+author: "Nagaprasad Rudrapatna" 
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, 
+                      warning = F, 
+                      message = F)
+```
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(lme4)
+library(broom.mixed)
+library(gridExtra)
+```
+
+### Introduction
+
+Lemurs are a type of "prosimian, which means they are primates that evolved before monkeys and apes" ("Lemur"). Lemurs, therefore, retain primitive characteristics, such as a wet nose. These primates are endemic only to Madagascar and are considered the world's "most endangered group of mammals" ("Lemur"). This means that once the lemurs go extinct in Madagascar, they will be extinct in the wilderness. The Duke Lemur Center (DLC), which was founded in 1966, is a research center that houses over 200 lemurs across 13 species---"the most diverse population of lemurs on Earth, outside their native Madagascar" ("History and Mission"). The DLC hopes to improve our understanding of the health, reproduction, and social dynamics of these primates so that our conservation efforts can become more effective. One of the reasons why lemurs are fascinating to study is that they are an "extremely diverse taxonomic group" ("History and Mission"). Up to this point, researchers have identified over 100 species of lemur, and these species "vary dramatically in their styles of locomotion, diet, social structure/behavior, and activity patterns" ("History and Mission"). 
+
+
+
+The DLC maintains detailed records for over "4,300 individuals from more than 40 closely related yet biologically diverse prosimian primate taxa" ("Duke Lemur Center Database"). The DLC has published information (including sex and age) about roughly 3,700 individuals (from 27 taxa---a key of taxonomic codes is available in "Lemurs"). The raw data was cleaned by Jesse Mostipak and released as part of the Tidy Tuesday weekly challenge in August 2021. The cleaned dataset includes weight measurements for each lemur across time, and this variable motivated the primary research question: for which types of lemurs do changes over time greatly impact weight measurements? I initially hypothesized that a lemur's taxonomic code would be an important factor and eventually considered weight measurements for Coquerel's sifakas, red-ruffed lemurs, and black-and-white ruffed lemurs.
+
+
+### Data
+
+The original dataset obtained from the Github repository for the Tidy Tuesday challenge included 82,609 rows and 54 columns. This dataset included multiple weight measurements (in grams) recorded across the lives of 2,244 distinct individuals (598 animals only had one or two weight measurements and hence were excluded). Weights under 500 grams were generally rounded to the nearest 0.1 to 1 gram, while weights above 500 grams were generally rounded to the nearest 1 to 20 grams. Preparing the final dataset involved removing or altering (e.g., converting to a factor) many variables. The goal was to reduce the number of potential predictor variables based on the fact that animal weight was the response variable. Any identification markers (except the animal's name and the animal's dam's name as these variables were potential random effects; an animal's sire's name was not considered since this information was missing for roughly half of the animals in the final dataset) or dates (except the date of birth and the date of each weight measurement; these variables were not used in the model but helped me understand the hierarchical structure of the data and grouping of measurements for the same animal) were removed since they would not be included in a model. An animal's hybrid status was also excluded since every animal in the final dataset was not a hybrid. The original dataset also included several variables that indicated an animal's age. Since the basic (level one) observational unit of the data is an animal on a particular weight measurement date, the animal's age when the measurement was taken seemed to be the most natural choice. A qualitative designation of the animal's age at the time of the weight measurement---infant or juvenile, young adult, or adult---was also considered to bolster the interpretability of the final model (see Discussion/Conclusions). In total, 40 variables were deemed irrelevant to modeling weight measurements and thus excluded from the final dataset. 
+
+
+Most of the remaining 14 variables were altered to assist in the model-building phase (e.g., I altered the coding of variables to ensure that the final dataset had no missingness). Initially, an animal's sex could be male, female, or not determined. Since less than 0.018% of animals had indeterminate sex, this category was removed. The final dataset included approximately equal proportions of male and female animals. The original dataset included information for animals from 27 taxa (i.e., 27 species). Coquerel's sifakas (coded as PCOQ) had the highest median weight (3,520 grams), while gray mouse lemurs (coded as MMUR) had the lowest median weight (74 grams). As shown in Figure 1 (left), the original dataset included a disproportionate number of light lemurs. As a result, the distribution of the unadjusted response variable was asymmetric. Given the objective of the analysis, it's natural to consider an animal's taxonomic code as a predictor variable. Including a categorical variable with 27 levels in a model, however, would compromise interpretability. To help resolve these issues, I restricted the analysis to the 323 lemurs belonging to the three heaviest species (in terms of both median and mean weight)---Coquerel's sifakas, red-ruffed lemurs (coded as VRUB), and black-and-white ruffed lemurs (coded as VVV). As shown in Figure 1 (right), even after limiting the analysis to these three species, the distribution of the response variable included a sizable spike at low weights (corresponding to infant and juvenile lemurs). To address this concern, I decided to log-transform the response variable. Based on Figure 2, the distribution of the adjusted response variable for each taxonomic code is unimodal and left-skewed, which is to be expected since these species of lemur have high median/mean weights.
+
+```{r}
+lemurs <- read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-08-24/lemur_data.csv')
+
+lemurs2 <- subset(lemurs, select = -c(dlc_id, stud_book, birth_month, estimated_dob, estimated_concep, concep_month, dam_id, dam_taxon, dam_dob, dam_age_at_concep_y, sire_id, sire_taxon, sire_dob, sire_age_at_concep_y, age_at_death_y, age_of_living_y, age_last_verified_y, age_max_live_or_dead_y, dob_estimated, change_since_prev_wt_g, avg_daily_wt_change_g, r_min_dam_age_at_concep_y, expected_gestation_d, concep_date_if_preg, infant_dob_if_preg, pct_preg_remain_if_preg, current_resident, litter_size, sire_name, month_of_weight, age_at_wt_wk, age_at_wt_mo, age_at_wt_mo_no_dec, days_since_prev_wt, days_before_death, days_before_inf_birth_if_preg, hybrid, expected_gestation, age_at_wt_y, dod))
+
+list <- lemurs2 %>%
+  group_by(name) %>% 
+  count() %>%
+  filter(n <= 2)
+
+lemurs3 <- lemurs2 %>%
+  filter(sex != "ND")
+
+for (i in 1:nrow(list)) {
+  lemurs3 <- lemurs3 %>%
+  filter(lemurs3$name != list$name[i])
+}
+```
+
+```{r}
+p1 <- ggplot(data = lemurs3, aes(x = weight_g))  + 
+  geom_histogram(fill = "steelblue", color = "black") + 
+  labs(x = "Weight (in grams)", y = "Count")
+```
+
+```{r}
+lemurs3 <- lemurs3 %>%
+  filter(weight_g < 7500)
+
+lemurs3 <- lemurs3 %>%
+  filter(taxon == "PCOQ" | taxon == "VRUB" | taxon == "VVV")
+```
+
+```{r}
+p2 <- ggplot(data = lemurs3, aes(x = weight_g))  + 
+  geom_histogram(fill = "steelblue", color = "black") + 
+  labs(x = "Weight (in grams)", y = "Count")
+```
+
+```{r fig.cap = "Left: The distribution of the response variable before adjustments. Right: The distribution of the response variable after removing 24 taxonomic codes", fig.height = 2.5}
+grid.arrange(p1, p2, ncol = 2, nrow = 1)
+```
+
+```{r fig.cap = "The distribution of the log-transformed response variable, faceted by taxonomic code", fig.width = 5, fig.height = 3}
+lemurs3$log_weight <- log(lemurs3$weight_g)
+
+lemurs3$taxon <- as.factor(lemurs3$taxon)
+
+p3 <- ggplot(data = lemurs3, aes(x = log_weight)) +
+  geom_histogram(fill = "steelblue", color = "black") + 
+  labs(x = "Log Weight (in log grams)", y = "Count") +
+  facet_wrap(~ taxon)
+p3
+```
+
+
+Another variable I hypothesized would be significant in modeling weight in female lemurs was pregnancy status on a given weight measurement date (males were coded as not pregnant). Roughly 7.9% of females were pregnant during at least one weight measurement, and pregnant females (4,350 grams) had a higher median weight than non-pregnant females (3,430 grams). A related variable was infant litter size, which denotes the number of infants in the litter a female produced if she was pregnant on a given weight measurement date and ranges from 1 to 4 (animals that were never pregnant, including males, were coded as 0). The animal's total number of known offspring, which ranged from 0 to 35, was also considered as a potential predictor variable. The animal's age category (infant or juvenile, young adult, or adult) at the time of a given weight measurement, which was determined based on a life history table, was also hypothesized to be an influential predictor of weight. Approximately 52% of the measurements were taken for adult animals; approximately 35% of the measurements were taken for infant or juvenile animals; the remaining 13% were taken for young adults. Young adults and adults had similar median weights, and infants/juveniles had the lowest median weight (as expected). Notably, the final dataset included roughly equal proportions of male and female animals in each age category. The original dataset also included some variables regarding an animal's birth, such as birth type and birth institution. Each animal in the final dataset was either captive-born (CB) or wild-born (WB), and wild-born animals had a higher median weight (WB: 3,600 grams; CB: 3,400 grams). Also, the original dataset included the name of the institution where the animal was born or the country where the animal was caught (in the wild). Since roughly 85.5% of the animals were born at the DLC, I decided to recode the variable as "Duke Lemur Center" or "Other." Lemurs not born at the DLC had a higher median weight (Other: 3,700 grams; DLC: 3,355 grams). 
+
+
+Since the weight measurements were recorded over time, it's important to account for the effect of time. In this context, the animal's age when the measurement was taken is the most appropriate quantitative indicator of time since the measurements are recorded across an animal's life (some animals have measurements during each stage of their lives). I specifically decided to use age in days because, for very young (newborn) lemurs, age in months or years is not easily interpretable. Figure 3 shows that log-transforming this age variable is necessary to achieve a roughly linear relationship with the log-transformed response variable. These spaghetti plots suggest that lemur weights (at least for these three species) eventually stabilize. Figure 4 shows that, for a random sample of animals, the relationship between log-transformed weight and log-transformed age is roughly linear. There is curvature in the plots for some lemurs (e.g., Gemina and Pontius Pilate), but in general, we can assume linearity reasonably holds here. In summary, with the addition of log-transformed weight and log-transformed age (at the time of a given weight measurement), the final dataset includes 15,678 rows (corresponding to 323 unique animals, each belonging to one of the following taxonomic codes---PCOQ, VRUB, or VVV) and 16 columns.
+
+```{r}
+lemurs3$dam_name <- ifelse(is.na(lemurs3$dam_name) == T, "Unknown", lemurs3$dam_name)
+
+lemurs3$birth_type <- as.factor(lemurs3$birth_type)
+
+lemurs3 <- lemurs3 %>%
+  filter(birth_type != "Unk")
+
+lemurs3$birth_institution <- ifelse(lemurs3$birth_institution == "Duke Lemur Center", "Duke Lemur Center", "Other")
+
+lemurs3$birth_institution <- as.factor(lemurs3$birth_institution)
+
+lemurs3$n_known_offspring <- ifelse(is.na(lemurs3$n_known_offspring) == T, 0, lemurs3$n_known_offspring)
+
+lemurs3$infant_lit_sz_if_preg <- ifelse(is.na(lemurs3$infant_lit_sz_if_preg) == T, 0, lemurs3$infant_lit_sz_if_preg)
+
+lemurs3$age_category <- as.factor(lemurs3$age_category)
+lemurs3$preg_status <- as.factor(lemurs3$preg_status)
+lemurs3$sex <- as.factor(lemurs3$sex)
+
+lemurs3 <- lemurs3 %>%
+  filter(age_at_wt_d > 0) # no age = 0 since we log-transform
+
+lemurs3$log_age_at_wt_d <- log(lemurs3$age_at_wt_d) # log-transform age to get linearity on lattice/spaghetti plots
+```
+
+```{r}
+## spaghetti plot
+p4 <- ggplot(data = lemurs3, aes(x = age_at_wt_d, y = log_weight)) + 
+  geom_line(aes(group = name), color = "light gray") + 
+  geom_smooth(color = "black", size = 1) + 
+  labs(x = "Age (in days)",
+       y = "Log Weight (in log grams)")
+```
+
+```{r}
+## spaghetti plot
+p5 <- ggplot(data = lemurs3, aes(x = log_age_at_wt_d, y = log_weight)) + 
+  geom_line(aes(group = name), color = "light gray") + 
+  geom_smooth(color = "black", size = 1) + 
+  labs(x = "Log Age (in log days)",
+       y = "Log Weight (in log grams)")
+```
+
+```{r  fig.cap = "Spaghetti plots describing the change in log-transformed weight over time (Left) and the change in log-transformed weight over log-transformed time (Right)", fig.height = 3.25, fig.width = 4.8}
+grid.arrange(p4, p5, ncol = 2, nrow = 1)
+```
+
+```{r fig.cap = "A lattice plot of log-transformed weight over log-transformed time for 16 randomly selected animals", fig.width = 4.5, fig.height = 3.5}
+set.seed(104)
+
+# get sample of 16 animals
+sample_lem <- lemurs3 %>%
+  distinct(name) %>%
+  sample_n(16) %>% pull()
+
+# get data for those animals
+sample_data <- lemurs3 %>%
+  filter(name %in% sample_lem)
+
+p6 <- ggplot(data = sample_data, aes(x = log_age_at_wt_d, y = log_weight)) +
+  geom_point() +
+  geom_line() +
+  labs(x = "Log Age (in log days)",
+       y = "Log Weight (in log grams)") +
+  facet_wrap(~ name)
+p6
+```
+
+### Methodology 
+
+
+From the previous sections, it's clear that the data has a hierarchical structure since it includes multiple weight measurements for each animal over time. I, therefore, decided to fit a multilevel model. Moreover, as discussed in the previous section, the unadjusted response variable---an animal's weight, in grams---was not normally distributed (i.e., asymmetric). After applying a logarithmic transformation, the distribution of the response variable appeared unimodal and left-skewed (but roughly symmetric for larger weight measurements). This suggested that the adjusted response variable could be modeled using the normal distribution (see Discussion/Conclusions). I decided to only consider models with two levels. The observational unit at level one was an animal on a specific weight measurement date, and the observational unit at level two was the animal across all measurement dates. During my exploration of the dataset, I noticed that some of the animals are biologically related (i.e, two animals may have the same dam and/or sire). So, I initially considered adding a third level (the animal's parents) to the model. However, upon closer examination, I realized that this third level could only capture maternal (dams) connections between animals since the identity of the sire (father) was unknown for approximately half of the animals in the final dataset (and halving the size of the dataset was not an appealing choice given the fact that I had already limited my analysis to 323 of the 2,244 total animals). 
+
+
+At level one, I considered including the effect of time (the log-transformed age of the animal at the time of a given weight measurement), the animal's age category at the time of a given weight measurement (baseline: adult), and the animal's pregnancy status at the time of a given weight measurement (baseline: not pregnant). I considered age category and pregnancy status as level one predictor variables because their values depend on the time of the weight measurement. At level two, I considered including the animal's sex (baseline: female), taxonomic code (baseline: PCOQ), birth institution (baseline: Duke Lemur Center), birth type (baseline: captive birth), number of known offspring, and infant litter size. This was because these variables are animal-specific but independent of the time of a given weight measurement. I began the model-building phase by fitting an unconditional means model, in which the response variable was log-transformed weight and the sole random effect was an animal's name, and computing the intraclass correlation coefficient. I found that approximately 45.6% of the variability in log-transformed weight measurements could be attributed to differences between animals, and the remaining 54.4% of the variability in the measurements could be attributed to changes over time within animals. In other words, the average correlation between any two log-transformed weight measurements for the same animal is about 0.456. Since 0.456 is far from 0, we can safely assume that accounting for the multilevel structure is important. Next, I fit an unconditional means model that included two random effects: one for the animal's name and another for the animal's dam's name. Based on the Pseudo $R^2$ value, the introduction of the dam name as a random effect resulted in a 14.2% approximate increase in the residual variance. This does not make much sense since the residual variance should never increase when additional effects are added to a model (limitation of Pseudo $R^2$). At the same, this observation means there is no evidence that including an additional level of complexity is necessary. Thus, in this analysis, only two-level models are considered.
+
+
+
+Continuing with the model-building phase, I fit an unconditional growth model and computed the Pseudo $R^2$ value (estimating the change in within-animal variance between the first unconditional means model and the unconditional growth model) to assess how much of the within-animal variability could be attributed to systematic changes over time (whose effect is given by the animal's age at the time of the measurement). I found that accounting for the effect of time resulted in a staggering 90.4% approximate decrease in the residual variance. This statistic shows that an animal's log-transformed age is critical in understanding its log-transformed weight measurements. After completing this preliminary stage in model-building, I began to add predictor variables one at a time as fixed effects at level one. I used drop-in-deviance ($\chi^2$) tests and AIC/BIC (lower = better) to compare these nested models (each successive model has an additional predictor variable). I found that an animal's age category and pregnancy status were statistically significant predictors of log-transformed weight since the $\chi^2$ tests returned negligible p-values and the AIC/BIC of the model decreased with the insertion of each variable. At level two, I began by considering the equation for the intercept term. As with the level one covariates, I added level two predictor variables one at a time to model the intercept term and evaluated the significance of each predictor variable using $\chi^2$ tests and AIC/BIC. Of the six potential level two variables, four were deemed statistically significant (negligible p-values from the $\chi^2$ tests and decreases in AIC/BIC): sex, taxonomic code, birth type, and infant litter size (if an animal was pregnant on a given weight measurement date). 
+
+
+I then considered adding each of the level two covariates to the equations modeling the slopes for each of the level one variables (time, age category, and pregnancy status). Using the same model selection procedure, I found that taxonomic code and birth type were significant additions to the equation modeling the slope for time (log-transformed age at the time of the weight measurement); infant litter size was the only significant addition to the equation modeling the slope for the infants and juveniles; birth type and infant litter size were significant additions to the equation modeling the slope for young adults, and no level two variables were significant additions to the equation modeling the slope for pregnant animals. Finally, I considered whether each level two equation needed an error term (to potentially reduce the number of variance components in the final model). For this component of model selection, I wanted to use likelihood ratio tests based on parametric bootstrapped p-values; however, parametric bootstrapping presented an enormous computational cost and hence I relied once more on AIC/BIC and $\chi^2$ tests. In general, the $\chi^2$ test was adequate for model comparison because the p-values were either very small (parametric bootstrapping would have returned even smaller p-values) or sufficiently large (> 0.50). Looking at the changes in AIC and BIC largely confirmed these results. In summary, of the five error terms (one for the intercept term and one for each of the four slope terms), all but one appeared statistically significant---the error term for the slope corresponding to pregnancy status was insignificant. Since this level two equation also contained no covariates, I was skeptical about the significance of pregnancy status, after accounting for the level two effects. I tested the significance of this variable again and found that it was indeed insignificant after accounting for the level two effects. The coefficients of the final model (fixed effects and variance components) are displayed in Table 1.
+
+```{r}
+model <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + age_category:birth_type + age_category:infant_lit_sz_if_preg + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model) %>% kable(digits = 3, caption = "The final model for log-transformed weight")
+```
+
+
+Based on Table 1, the interaction between infant litter size and the infant/juvenile level of age category appears to be statistically insignificant since the t-statistic (-1.294) associated with its coefficient estimate is less than 2. But since the interaction between infant litter size and the young adult level of age category does appear to be significant (t-statistic = -2.336 < -2), I decided to keep the overall interaction term (between infant litter size and age category) in the final model. It's important to see the final model in terms of mathematical notation as well ($j$ corresponds to an animal on a given measurement date, $i$ corresponds to the animal across all measurement dates, and $Y_{ij}$ is a specific weight measurement for a given animal). The level one model is:
+
+
+$$
+\log(Y_{ij}) = a_i + b_i \log(\text{age})_{ij} + c_i \text{ageCategoryIJ}_{ij} + d_i \text{ageCategoryYoungAdult}_{ij} + \epsilon_{ij}.
+$$ 
+
+
+
+There are four level two equations:
+
+
+$$
+\begin{aligned}
+a_i &= \alpha_0 + \alpha_1 \text{taxonVRUB}_{i} + \alpha_2 \text{taxonVVV}_{i} + \alpha_3 \text{sexM}_{i} + \alpha_4 \text{birthTypeWB}_{i} + \alpha_5 \text{infantLitterSize}_{i} + u_i \\
+b_i &= \beta_0 + \beta_1 \text{taxonVRUB}_{i} + \beta_2 \text{taxonVVV}_{i} + \beta_3 \text{birthTypeWB}_{i} + v_i \\
+c_i &= \gamma_0 + \gamma_1 \text{infantLitterSize}_{i} + w_i \\
+d_i &= \psi_0 + \psi_1 \text{birthTypeWB}_{i} + \psi_2 \text{infantLitterSize}_{i} + z_i.
+\end{aligned}
+$$ 
+
+
+Substituting the level two equations into the level one model, we obtain the following composite model
+
+
+$$
+\begin{aligned}
+\log(Y_{ij}) &= [\alpha_0 + \alpha_1 \text{taxonVRUB}_{i} + \alpha_2 \text{taxonVVV}_{i} + \alpha_3 \text{sexM}_{i} + \alpha_4 \text{birthTypeWB}_{i} + \alpha_5 \text{infantLitterSize}_{i}] \\ 
+&+ [\beta_0 + \beta_1 \text{taxonVRUB}_{i} + \beta_2 \text{taxonVVV}_{i} + \beta_3 \text{birthTypeWB}_{i}] \times \log(\text{age})_{ij} \\
+&+ [\gamma_0 + \gamma_1 \text{infantLitterSize}_{i}] \times \text{ageCategoryIJ}_{ij} \\
+&+ [\psi_0 + \psi_1 \text{birthTypeWB}_{i} + \psi_2 \text{infantLitterSize}_{i}] \times \text{ageCategoryYoungAdult}_{ij} \\
+&+ u_i + v_i \log(\text{age})_{ij} + w_i \text{ageCategoryIJ}_{ij} + z_i \text{ageCategoryYoungAdult}_{ij} + \epsilon_{ij},
+\end{aligned}
+$$
+
+
+where the error terms are $u_i$, $v_i$, $w_i$, $z_i$, and $\epsilon_{ij}$. We assume $\epsilon_{ij} \sim N(0, \sigma^2)$ and the following variance-covariance structure at level two
+
+
+
+$$
+\begin{aligned} 
+\begin{bmatrix}
+           u_i \\
+           v_i \\
+           w_i \\
+           z_i
+\end{bmatrix} \sim 
+N \left(\begin{bmatrix}
+           0 \\
+           0 \\
+           0 \\
+           0 \\
+  \end{bmatrix}, 
+  \begin{bmatrix}
+      \sigma_{u}^2 & \sigma_{uv} & \sigma_{uw} & \sigma_{uz} \\
+       \sigma_{uv} & \sigma_{v}^2 & \sigma_{vw} & \sigma_{vz} \\
+       \sigma_{uw} & \sigma_{vw} & \sigma_{w}^2 & \sigma_{wz} \\
+      \sigma_{uz} & \sigma_{vz} & \sigma_{wz} & \sigma_{z}^2 \\
+  \end{bmatrix} \right)  
+\end{aligned}.
+$$
+
+
+
+In total, the final model includes 15 fixed effects ($\hat \alpha_0 = 3.309$, $\hat \alpha_1 = 1.281$, $\hat \alpha_2 = 1.269$, $\hat \alpha_3 = -0.053$, $\hat \alpha_4 = 5.361$, $\hat \alpha_5 = 0.077$, $\hat \beta_0 = 0.634$, $\hat \beta_1 = -0.160$, $\hat \beta_2 = -0.159$, $\hat \beta_3 = -0.683$, $\hat \gamma_0 = 0.500$, $\hat \gamma_1 = -0.162$, $\hat \psi_0 = 0.371$, $\hat \psi_1 = -0.315$, $\hat \psi_2 = -0.049$) and 11 variance components ($\hat \sigma_u^2 = 2.90$, $\hat \sigma_v^2 = 0.051$, $\hat \sigma_w^2 = 0.283$, $\hat \sigma_z^2 = 0.054$, $\hat \sigma_{uv} = -0.993$, $\hat \sigma_{uw} = -0.908$, $\hat \sigma_{uz} = -0.735$, $\hat \sigma_{vw} = 0.895$, $\hat \sigma_{vz} = 0.667$, $\hat \sigma_{wz} = 0.854$, $\hat \sigma^2 = 0.04$). Of the 15 fixed effects, 9 correspond to main effects and 6 correspond to interaction terms (by the nature of how two-level modeling works)---the interaction between the two levels (VRUB and VVV) of taxonomic code and log-transformed age (time), the interaction between birth type and log-transformed age, the interaction between birth type and the young adult level of age category (the interaction with the other level of age category was automatically dropped due to rank deficiency in the fixed effect model matrix), and the interaction between infant litter size and the two levels of age category. 
+
+To bolster the validity of my conclusions, I decided to assess whether the multilevel modeling assumptions were satisfied by this final model. In particular, I examined a plot of the residuals versus the fitted values (Figure 5), a Q-Q plot for the residuals (Figure 6, left), and a Q-Q plot for the random intercept (Figure 6, right). From Figure 5, it's clear that the points are not randomly scattered around 0. Instead, there seems to be a nonlinear pattern in the residuals. I attempted to transform the response variable but was unable to successfully resolve this issue. The behavior of the residuals at low fitted values is especially concerning, but this is somewhat expected since the distribution of the adjusted response variable is left-skewed. The left plot of Figure 6 shows clear departures from normality in the distribution of the residuals (at both extremes). The right plot of Figure 6 shows that the distribution of the random intercept is approximately normal. In an attempt to address the issue in the left plot of Figure 6, I searched for potential outliers in the data. However, I did not find any unusually large weight measurements (I had already excluded weight measurements above 7,500 grams at the data exploration phase) that might explain the deviance of the plot from the theoretical line. In summary, although all of the fixed effects are statistically significant (excluding the interaction between infant litter size and the infant/juvenile level of age category), this final model does not adequately satisfy the modeling assumptions.
+
+```{r fig.height = 4, fig.width = 4, fig.cap = "A plot of the residuals versus the values fit by the final model displayed in Table 1"}
+# residuals v fitted
+plot(model, xlab = "Fitted Values", ylab = "Residuals")
+```
+
+```{r fig.height = 4, fig.width = 5, fig.cap = "Left: A Q-Q plot for the residuals. Right: A Q-Q plot for the random intercept"}
+par(mfrow = c(1, 2))    
+
+# checking the normality of residuals:
+qqnorm(resid(model), main = "")
+qqline(resid(model), col = "steelblue", lwd = 2)
+
+# checking the normality of the random effects:
+qqnorm(ranef(model)$name$`(Intercept)`, main = "")
+qqline(ranef(model)$name$`(Intercept)`, col = "steelblue", lwd = 2)
+```
+
+
+### Results
+
+
+Before beginning to interpret some of the coefficients of the final model, it's important to recall the objective of the analysis: to determine the attributes of lemurs whose weight measurements are influenced by time. As such, the goal of this section is to understand the coefficients in the level two equation for $b_i$. We know that each of the level two predictors in the equation for $b_i$ are statistically significant. This means that the interactions between taxonomic code and log-transformed age (time) and birth type and log-transformed age (time) are indicative of the log-transformed weight measurements (and hence the unadjusted weight measurements). It's sometimes helpful to begin by interpreting the global intercept term (as it provides a baseline for comparison). Since $\hat \alpha_0 = 3.309$, the estimated mean weight measurement for captive-born, adult female Coquerel's sifakas who produced zero infants in a litter and are zero log days (one day) old at the time of the measurement is 27.36 grams. Since lemurs must be more than a day old to be classified as adults, this interpretation, while technically correct, is not meaningful in practice (the same is true of all $\alpha$'s). We now proceed to interpret the fixed effects that are more pertinent to the primary research question. Since $\hat \beta_0 = 0.634$, as a captive-born Coquerel's sifaka's age increases by one log day, its estimated weight measurement multiplies by a factor of 1.89, after controlling for age category at the time of the measurement, sex, and infant litter size. This means that, for Coquerel's sifakas, weight measurements are expected to increase over time (holding all else constant). Since $\hat \beta_1 = -0.160$, the estimated effect of time (log-transformed age at the time of the measurement) on weight for red-ruffed lemurs is 0.85 times as large as the effect of time on weight for Coquerel's sifakas, after controlling for birth type, age category at the time of the measurement, sex, and infant litter size. This means that time has a greater influence on the weight measurements of Coquerel's sifakas than those of red-ruffed lemurs (holding all else constant). Since $\hat \beta_2 = -0.159$, the estimated effect of time (log-transformed age at the time of the measurement) on weight for black-and-white ruffed lemurs is 0.85 times as large as the effect of time on weight for Coquerel's sifakas, after controlling for birth type, age category at the time of the measurement, sex, and infant litter size. This implies that time has the greatest influence on the weight measurements of Coquerel's sifakas (holding all else constant). Since $\hat \beta_3 = -0.683$, the estimated effect of time (log-transformed age at the time of the measurement) on weight for wild-born lemurs is 0.51 times as large as the effect of time on weight for captive-born lemurs, after controlling for taxonomic code, age category at the time of the measurement, sex, and infant litter size. This means that time is almost twice as influential on the weight measurements of captive-born lemurs (holding all else constant). Finally, to better understand the error term $v_i$, it's natural to consider $\hat \sigma_v^2$. Since $\hat \sigma_v^2 = 0.051$, the estimated variance of lemur-to-lemur deviations in changes to log-transformed weight measurements over time is 0.051. This means that the estimated lemur-to-lemur variability in log-transformed weight measurements over time is relatively small.
+
+
+
+### Discussion/Conclusions
+
+
+This analysis investigated the effect of time on lemur weight. Unfortunately, the weight measurements were not initially normally distributed. After limiting the scope of the analysis to the three heaviest species (taxonomic codes) of lemur and applying a logarithmic transformation, the distribution of the weight measurements appeared unimodal (but left-skewed). We proceeded under the assumption that the response variable could be modeled using the normal distribution and later discovered that this assumption may not be valid when checking the multilevel modeling assumptions (especially based on Figure 6, left). This departure from normality in the distribution of the residuals, along with the violations of linearity (based on Figure 5), suggested that the final model inadequately describes the hierarchical structure of the data. This presents a serious challenge to the reliability of the interpretations of the previous section. Furthermore, although restricting the analysis to three taxonomic codes (PCOQ, VRUB, VVV) facilitated the analysis, it substantially limits the scope of the findings. In other words, the conclusions from this analysis are not very generalizable to lemurs as a whole. One could imagine that the conclusions of this analysis might extend to heavy lemurs that are classified under other taxonomic codes; however, there is no concrete evidence to support this assertion. 
+
+
+In this context, time refers to the age of the animal (in days) at the time of a given weight measurement. While exploring the relationship between this age variable and the adjusted response variable, it became clear that this indicator of time should be log-transformed to satisfy the linearity condition (Figures 3 and 4). Two-level models were primarily considered during the model-building phase and a combination of $\chi^2$ tests and AIC/BIC comparisons guided the selection of predictor variables at each level (as well as the variance components at level two). The final multilevel model, shown in Table 1, included 15 fixed effects and 11 variance components. This model addressed the primary research question: for which types of lemurs do changes over time greatly impact weight measurements? Based on the previous section, changes over time had the greatest influence on the weight measurements of Coquerel's sifakas (among the three taxonomic codes considered) and, more generally, captive-born lemurs (as opposed to those that were wild-born). This conclusion emphasizes the fact that the effect of time differs by taxonomic code (species). This is not very surprising; in fact, it's quite plausible that different species of lemur would develop at different rates (which would help explain the differences in the effect of log-transformed age on weight measurements). The relevance of birth type, however, was surprising to me because I did not think that an animal's progression in weight over time (particularly during the young adult and adult phases of life) would be related to the circumstances surrounding its birth. This is an interesting finding that could prove useful to researchers (perhaps at the DLC) who seek to understand the developmental cycles (and growth patterns) of Coquerel's sifakas, red-ruffed lemurs, and black-and-white ruffed lemurs.
+
+
+
+In addition to the limitations described above, it's important to notice that the data is actually grouped into three levels. The third level includes information about an animal's parents (dam and sire). As mentioned in the section on Methodology, a three-level structure was initially considered but quickly abandoned once I encountered substantial missingness in the sire's identity and noticed that including the dam's identity (as a random effect) did not greatly improve the model. In the future, I would be interested in investigating this third layer of complexity in greater detail because I think that treating two lemurs with the same parents as independent samples is not appropriate. Additionally, when crafting the interpretations in the previous section, I noticed that the presence of log-transformed age and age category (at the time of the weight measurement) rendered the interpretations of the fixed effects in the level two equation for $a_i$ useless. Since log-transformed age equaled 0 and the baseline level of age category was adult, these interpretations, while technically correct, were not meaningful in practice. As a result, in future analyses, I would consider either removing age category (since log-transformed age is the indicator of time) or recoding the variable to make it compatible with a value of zero for time. I also decided to interpret $\hat \sigma_v^2$ in the previous section in terms of log-transformed weight measurements (the adjusted response variable). In the future, I would like to interpret the variance components in terms of the unadjusted response variable (weight measurements) to improve the accessibility of my findings. Lastly, I would love to perform a similar analysis for other lemur populations. For instance, I could explore lemurs belonging to taxonomic codes with relatively low median/mean weights (e.g., MMUR).
+
+
+
+### Works Cited
+
+
+"Duke Lemur Center Database." Duke Lemur Center, 18 Dec. 2019, https://lemur.duke.edu/duke-lemur-center-database/. 
+
+"History and Mission." Duke Lemur Center, 19 Apr. 2022, https://lemur.duke.edu/about/history-mission/. 
+
+"Lemur." San Diego Zoo Wildlife Alliance Animals and Plants, https://animals.sandiegozoo.org/animals/lemur. 
+
+"Lemurs." GitHub, R For Data Science, 24 Aug. 2021, https://github.com/rfordatascience/tidytuesday/tree/master/data/2021/2021-08-24. 
