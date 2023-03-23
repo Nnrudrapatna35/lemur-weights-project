@@ -1,0 +1,837 @@
+---
+title: "Analysis"
+author: "Nagaprasad Rudrapatna" 
+output: pdf_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, 
+                      warning = F, 
+                      message = F)
+```
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(lme4)
+library(broom.mixed)
+library(viridis)
+library(skimr)
+```
+
+```{r}
+lemurs <- read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-08-24/lemur_data.csv')
+```
+
+```{r}
+ggplot(data = lemurs, aes(x = current_resident, y = weight_g)) + 
+  geom_boxplot(fill = "steelblue", color = "black")  +
+  labs(title = "Weight (in grams)", 
+       subtitle = "by residency status")
+
+lemurs %>%
+  count(current_resident) %>%
+  mutate(p = n / sum(n))
+```
+
+no clear relationship between `current_resident` and `weight_g`
+
+```{r}
+ggplot(data = lemurs, aes(x = avg_daily_wt_change_g))  + 
+  geom_histogram(fill = "steelblue", color = "black") + 
+  labs(title = "Avg Daily Change in Weight (in grams) between two consecutive weights")
+```
+
+```{r}
+# removing irrelevant variables
+lemurs2 <- subset(lemurs, select = -c(dlc_id, stud_book, birth_month, estimated_dob, estimated_concep, concep_month, dam_id, dam_taxon, dam_dob, dam_age_at_concep_y, sire_id, sire_taxon, sire_dob, sire_age_at_concep_y, age_at_death_y, age_of_living_y, age_last_verified_y, age_max_live_or_dead_y, dob_estimated, change_since_prev_wt_g, avg_daily_wt_change_g, r_min_dam_age_at_concep_y, expected_gestation_d, concep_date_if_preg, infant_dob_if_preg, pct_preg_remain_if_preg, current_resident, litter_size, sire_name, month_of_weight, age_at_wt_wk, age_at_wt_mo, age_at_wt_mo_no_dec, days_since_prev_wt, days_before_death, days_before_inf_birth_if_preg, hybrid, expected_gestation))
+```
+
+all 323 animals in the final dataset are non-hybrids
+
+```{r}
+ggplot(data = lemurs2, aes(x = sex, y = weight_g)) + 
+  geom_boxplot(fill = "steelblue", color = "black")  +
+  labs(title = "Weight (in grams)", 
+       subtitle = "by sex")
+
+lemurs2 %>%
+  count(sex == "ND") %>%
+  mutate(p = n / sum(n))
+```
+
+- not determined sex: less than 0.018% of animals
+- remove them 
+
+```{r}
+list <- lemurs2 %>%
+  group_by(name) %>% 
+  count() %>%
+  filter(n <= 2)
+nrow(list)
+```
+
+- 598 animals whose weight was measured only once or twice
+- remove these
+
+```{r}
+lemurs3 <- lemurs2 %>%
+  filter(sex != "ND")
+
+for (i in 1:nrow(list)) {
+  lemurs3 <- lemurs3 %>%
+  filter(lemurs3$name != list$name[i])
+}
+```
+
+```{r}
+ggplot(data = lemurs3, aes(x = weight_g))  + 
+  geom_histogram(fill = "steelblue", color = "black") + 
+  labs(title = "Weight (in grams)")
+```
+
+```{r}
+ggplot(data = lemurs3, aes(x = taxon, y = weight_g)) + 
+  geom_boxplot(fill = "steelblue", color = "black")  +
+  labs(title = "Weight (in grams)", 
+       subtitle = "by taxonomic code")
+```
+
+highest median weight - Coquerel’s sifaka (PCOQ)
+lowest median weight - Gray mouse lemur (MMUR)
+
+small lemurs cause issues with the distribution of response; also taxon has too many levels to be included as is in the model as fixed effect
+
+```{r}
+lemurs3 %>%
+  filter(weight_g >= 7500)
+
+# exclude extremely high weight measurements
+
+lemurs3 <- lemurs3 %>%
+  filter(weight_g < 7500)
+
+lemurs3 %>%
+  group_by(taxon) %>%
+  summarise(median = median(weight_g), mean = mean(weight_g), n = n()) %>%
+  arrange(desc(mean))
+```
+
+limit it to the 3 heaviest lemur taxons on average
+- PCOQ, VRUB, and VVV
+
+```{r}
+lemurs3 <- lemurs3 %>%
+  filter(taxon == "PCOQ" | taxon == "VRUB" | taxon == "VVV")
+```
+
+```{r}
+lemurs3 %>%
+  count(sex) %>%
+  mutate(p = n / sum(n))
+```
+
+- dataset has roughly equal proportions of males and females
+
+** Analysis applies to heavy lemurs
+
+```{r}
+ggplot(data = lemurs3, aes(x = weight_g))  + 
+  geom_histogram(fill = "steelblue", color = "black") + 
+  labs(title = "Weight (in grams)")
+
+ggplot(data = lemurs3, aes(x = log(weight_g)))  + 
+  geom_histogram(fill = "steelblue", color = "black") + 
+  labs(title = "Log Weight (in grams)")
+
+ggplot(data = lemurs3, aes(x = log(weight_g)))  + 
+  geom_histogram(fill = "steelblue", color = "black") + 
+  labs(title = "Log Weight (in grams)") +
+  facet_wrap(~ taxon)
+```
+
+spike at low weights (IJ)
+right-skewed 
+unimodal
+
+log-transform response:
+left-skewed, unimodal
+
+```{r}
+lemurs3 %>%
+  group_by(taxon) %>%
+  count(age_category)
+```
+
+most IJ are of PCOQ taxon
+
+```{r}
+ggplot(data = lemurs3, aes(x = taxon, y = log(weight_g))) + 
+  geom_boxplot(fill = "steelblue", color = "black")  +
+  labs(title = "Log Weight (in grams)", 
+       subtitle = "by taxonomic code")
+```
+
+```{r}
+ggplot(data = lemurs3, aes(x = preg_status, y = log(weight_g))) + 
+  geom_boxplot(fill = "steelblue", color = "black")  +
+  labs(title = "Log Weight (in grams)", 
+       subtitle = "by pregnancy status")
+
+lemurs3 %>%
+  filter(sex == "F") %>%
+  count(preg_status) %>%
+  mutate(p = n / sum(n))
+
+lemurs3 %>%
+  filter(sex == "F") %>%
+  group_by(preg_status) %>%
+  summarise(median = median(weight_g))
+```
+
+- roughly 7.9% of females were pregnant during a weight check
+- pregnant animals have higher median weight
+
+```{r}
+ggplot(data = lemurs3, aes(x = age_category, y = log(weight_g))) + 
+  geom_boxplot(fill = "steelblue", color = "black")  +
+  labs(title = "Log Weight (in grams)", 
+       subtitle = "by age category")
+
+lemurs3 %>%
+  count(age_category) %>%
+  mutate(p = n / sum(n))
+
+lemurs3 %>%
+  group_by(sex) %>%
+  count(age_category) %>%
+  mutate(p = n / sum(n))
+```
+
+- roughly equal proportions of males and females in each age category
+
+~ 52% adult
+~ 35% IJ
+~ 13% young adult
+
+- young adults have similar median weight to adults, IJ have lowest median weight
+
+```{r}
+lemurs3$birth_type <- as.factor(lemurs3$birth_type)
+
+lemurs3 %>%
+  group_by(birth_type) %>%
+  summarise(median = median(weight_g), n = n())
+
+# remove unknown birth type
+
+lemurs3 <- lemurs3 %>%
+  filter(birth_type != "Unk")
+
+ggplot(data = lemurs3, aes(x = birth_type, y = log(weight_g))) + 
+  geom_boxplot(fill = "steelblue", color = "black")  +
+  labs(title = "Log Weight (in grams)", 
+       subtitle = "by birth type")
+```
+
+wild birth has slightly higher median log-weight
+
+```{r}
+lemurs3$birth_institution <- ifelse(lemurs3$birth_institution == "Duke Lemur Center", "Duke Lemur Center", "Other")
+
+lemurs3$birth_institution <- as.factor(lemurs3$birth_institution)
+
+lemurs3 %>%
+  ggplot(aes(x = birth_institution, y = log(weight_g))) + 
+  geom_boxplot(fill = "steelblue", color = "black")  +
+  labs(title = "Log Weight, in grams", 
+       subtitle = "by birth institution")
+
+lemurs3 %>%
+  group_by(birth_institution) %>%
+  count() 
+lemurs3 %>%
+  group_by(birth_institution) %>%
+  summarise(median = median(weight_g))
+```
+
+since the overwhelming majority (about 85.5%) of lemurs were born at DLC, we can simply consider DLC or not
+
+lemurs not born at the DLC has higher median weight
+
+```{r}
+# if n_known_offspring is missing, replace with 0
+
+lemurs3$n_known_offspring <- ifelse(is.na(lemurs3$n_known_offspring) == T, 0, lemurs3$n_known_offspring)
+
+ggplot(data = lemurs3, aes(x = n_known_offspring, y = log(weight_g))) +
+  geom_point() +
+  labs(x = "Number of known offspring",
+       y = "Log Weight in grams", 
+       title = "Log Weight as a function of known offspring")
+
+lemurs3 %>%
+  group_by(infant_lit_sz_if_preg) %>%
+  count()
+```
+
+no clear relationship with `n_known_offspring`
+
+```{r}
+lemurs3$infant_lit_sz_if_preg <- ifelse(is.na(lemurs3$infant_lit_sz_if_preg) == T, 0, lemurs3$infant_lit_sz_if_preg)
+
+ggplot(data = lemurs3, aes(x = infant_lit_sz_if_preg, y = log(weight_g))) +
+  geom_point() +
+  labs(x = "Size of Litter",
+       y = "Log Weight in grams", 
+       title = "Log Weight as a function of litter size when giving birth")
+```
+
+no relationship with litter size
+
+```{r}
+lemurs3 %>% skim() %>% select(skim_variable, n_missing, complete_rate)
+```
+
+```{r}
+lemurs3$log_weight <- log(lemurs3$weight_g)
+```
+
+```{r}
+# thus, we cannot have any age = 0 (weight checks on DOB)
+# use days because for very young lemurs, years/months not interpretable
+
+lemurs3 <- lemurs3 %>%
+  filter(age_at_wt_d > 0)
+
+lemurs3 %>%
+  distinct(name) %>%
+  count()
+```
+
+323 unique animals
+
+```{r}
+set.seed(7)
+
+# log-transform age to get linearity
+
+lemurs3$log_age_at_wt_d <- log(lemurs3$age_at_wt_d)
+
+# get sample of 24 animals
+sample_lem <- lemurs3 %>%
+  distinct(name) %>%
+  sample_n(24) %>% pull()
+
+# get data for those animals
+sample_data <- lemurs3 %>%
+  filter(name %in% sample_lem)
+```
+
+```{r}
+## Make a lattice plot of the weights over time for 24 randomly selected animals.
+
+ggplot(data = sample_data, aes(x = age_at_wt_d, y = log_weight)) +
+  geom_point() +
+  geom_line() +
+  labs(x = "Log of age when weight was taken, in days",
+       y = "Log Weight in grams", 
+       title = "Weight over time for lemurs") +
+  facet_wrap(~ name)
+```
+
+```{r}
+## Make a lattice plot of the weights over time for 24 randomly selected animals.
+
+ggplot(data = sample_data, aes(x = log_age_at_wt_d, y = log_weight)) +
+  geom_point() +
+  geom_line() +
+  labs(x = "Log of age when weight was taken, in days",
+       y = "Log Weight in grams", 
+       title = "Weight over time for lemurs") +
+  facet_wrap(~ name)
+```
+
+```{r}
+## spaghetti plot
+
+ggplot(data = lemurs3, aes(x = age_at_wt_d, y = weight_g)) + 
+  geom_line(aes(group = name), color = "light gray") + 
+  geom_smooth(color = "black", size = 1) + 
+  labs(x = "Log of age when weight was taken, in days",
+       y = "Log Weight in grams", 
+       title = "Weight over time for lemurs")
+```
+
+```{r}
+## spaghetti plot
+
+ggplot(data = lemurs3, aes(x = log_age_at_wt_d, y = log_weight)) + 
+  geom_line(aes(group = name), color = "light gray") + 
+  geom_smooth(color = "black", size = 1) + 
+  labs(x = "Log of age when weight was taken, in days",
+       y = "Log Weight in grams", 
+       title = "Weight over time for lemurs")
+```
+
+```{r}
+# spaghetti plot by sex
+ggplot(data = lemurs3, aes(x = log_age_at_wt_d, y = log_weight)) + 
+  geom_line(aes(group = name), color = "light gray") + 
+  geom_smooth(color = "black", size = 1) + 
+  labs(x = "Log of age when weight was taken, in days",
+       y = "Log Weight in grams", 
+       title = "Weight over time for lemurs") +
+  facet_wrap(~ sex)
+```
+
+## Unconditional means model 
+
+```{r}
+# Fit the unconditional means model
+model1 <- lmer(log_weight ~ 1 + (1 | name), data = lemurs3, REML = F)
+tidy(model1)
+```
+
+```{r}
+# Calculate the intraclass correlation
+0.7147289^2 / (0.7147289^2 + 0.7801945^2)
+```
+
+p-hat = 0.456
+~ 45.6% of the variability in log-weight measurements can be attributed to differences between lemurs (lemur-to-lemur variability). The average correlation between any two log-weight measurements for the same animal is about 0.456.
+
+About 54.4% of the variability in log-weight measurements can be attributed to changes over time
+
+```{r}
+# Fit the unconditional means model with parent - only mother since sire data is missing
+model1a <- lmer(log_weight ~ 1 + (1 | name) + (1 | dam_name), data = lemurs3, REML = F)
+tidy(model1a)
+```
+
+```{r}
+sigma_um1 <- 0.7801945^2
+sigma_um2 <- 0.8337123^2
+p_r2a <- (sigma_um1 - sigma_um2) / sigma_um1
+p_r2a
+```
+
+~ 14.2% increase in the residual variance due to inclusion of dam as a random effect
+
+## Unconditional growth model
+
+```{r}
+# Fit the unconditional growth model
+model2 <- lmer(log_weight ~ log_age_at_wt_d + (log_age_at_wt_d | name), data = lemurs3, REML = F)
+tidy(model2)
+```
+
+Calculate the $Pseudo R^2$ to estimate the change of within-animal variance between the unconditional means and unconditional growth models.
+
+```{r}
+# Pseudo R^2
+sigma_um <- 0.7801945^2
+sigma_ug <- 0.2421549^2
+p_r2 <- (sigma_um - sigma_ug) / sigma_um
+p_r2
+```
+
+~ 90.4% decrease in the residual variance due to inclusion of `log_age_at_wt_d` (age at time of weight check)
+
+# Adding Level One variables
+
+```{r}
+lemurs3$age_category <- as.factor(lemurs3$age_category)
+lemurs3$preg_status <- as.factor(lemurs3$preg_status)
+```
+
+```{r}
+model3 <- lmer(log_weight ~ log_age_at_wt_d + age_category + (log_age_at_wt_d | name), data = lemurs3, REML = F)
+tidy(model3)
+```
+
+```{r}
+# comparing models 2 and 3 using LRT with chi-squared
+anova(model3, model2, test = "Chisq")
+```
+
+p-value: < 2.2e-16
+model 3 > model 2 (include age_category)
+
+also, model 3 has lower AIC/BIC
+
+```{r}
+model4 <- lmer(log_weight ~ log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d | name), data = lemurs3, REML = F)
+tidy(model4)
+```
+
+```{r}
+# comparing models 3 and 4 using LRT with chi-squared
+anova(model4, model3, test = "Chisq")
+```
+
+p-value: 2.381e-14
+model 4 > model 3 (include `age_category`, `preg_status`)
+
+model 4 has lower AIC/BIC
+
+Level One covariates: `log_age_at_wt_d`, `age_category`, and `preg_status`
+
+## Adding Random Effects
+
+```{r}
+model5 <- lmer(log_weight ~ log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model5)
+```
+
+```{r}
+# comparing models 4 and 5
+anova(model5, model4, test = "Chisq")
+```
+
+parametric bootstrap takes too long but p-value from LRT is already very small
+p-value: < 2.2e-16
+model 5 > model 4 
+model 5 has lower AIC/BIC
+
+```{r}
+model6 <- lmer(log_weight ~ log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d + age_category + preg_status | name), data = lemurs3, REML = F)
+tidy(model6)
+```
+
+```{r}
+# comparing models 5 and 6
+anova(model6, model5, test = "Chisq")
+```
+
+model 6 has lower AIC/BIC but the difference is very small (AIC diff: 50.2; BIC diff: 11.9)
+
+does not justify the 5 additional variance components, so despite the LRT result, stick with model 5
+
+```{r}
+model7 <- lmer(log_weight ~ log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d | name) + (age_category | name), data = lemurs3, REML = F)
+tidy(model7)
+```
+
+```{r}
+anova(model5, model7, test = "Chisq")
+```
+stick with model 5 since it has lower AIC/BIC
+
+```{r}
+tidy(model5)
+```
+
+## Adding Level Two (lemur-specific) covariates
+
+```{r}
+lemurs3$taxon <- as.factor(lemurs3$taxon)
+lemurs3$sex <- as.factor(lemurs3$sex)
+```
+
+Level One: 
+
+$$
+\log(Y_{ij}) = a_i + b_i \log(age)_{ij} + c_i ageCategoryIJ_{ij} + d_i  ageCategoryYoungAdult_{ij} + \epsilon_{ij}
+$$
+---------
+u_i - intercept
+v_i - log(age)
+y_i - age_categoryIJ
+z_i - age_categoryYoungAdult
+
+Level 2 potential covariates: sex, taxon, birth_institution, birth_type, n_known_offspring, infant_lit_sz_if_preg
+
+only want categorical-quantitative interactions
+
+Level Two:
+
+intercept: taxon, sex, birth_type, infant_lit_sz_if_preg
+
+log-age: taxon, birth_type
+
+age_categoryIJ: infant_lit_sz_if_preg
+
+age_categoryYoungAdult: birth_type, infant_lit_sz_if_preg
+
+$$
+\begin{aligned}
+a_i &= \alpha_0 + \alpha_1 taxonVRUB_{i} + \alpha_2 taxonVVV_{i} + \alpha_3 sexM_{i} + \alpha_4 birthTypeWB_{i} + \alpha_5 infantLitterSize_{i} + u_i \\
+b_i &= \beta_0 + \beta_1 taxonVRUB_{i} + \beta_2 taxonVVV_{i} + \beta_3 birthTypeWB_{i} + v_i \\
+c_i &= \gamma_0 + \gamma_1 infantLitterSize_{i} + y_i \\
+d_i &= \psi_0 + \psi_1 birthTypeWB_{i} + \psi_2 infantLitterSize_{i} + z_i
+\end{aligned}
+$$
+
+Composite:
+
+$$
+\begin{aligned}
+\log(Y_{ij}) &= \alpha_0 + \alpha_1 taxonVRUB_{i} + \alpha_2 taxonVVV_{i} + \alpha_3 sexM_{i} + \alpha_4 birthTypeWB_{i} + \alpha_5 infantLitterSize_{i} \\ 
+&+ [\beta_0 + \beta_1 taxonVRUB_{i} + \beta_2 taxonVVV_{i} + \beta_3 birthTypeWB_{i}] \times \log(age)_{ij} \\
+&+ [\gamma_0 + \gamma_1 infantLitterSize_{i}] \times ageCategoryIJ_{ij} \\
+&+ [\psi_0 + \psi_1 birthTypeWB_{i} + \psi_2 infantLitterSize_{i}] \times ageCategoryYoungAdult_{ij} \\
+&+ u_i + v_i \log(age)_{ij} + y_i ageCategoryIJ_{ij} + z_i ageCategoryYoungAdult_{ij} + \epsilon_{ij}
+\end{aligned}
+$$
+preg_status was in final level 1 only model as a fixed effect
+preg_status dropped once we added level 2 covariates
+
+infant_lit_sz_if_preg:age_categoryIJ appears insignificant (t-statistic < 2) but the other level of the interaction is significant, so we keep it
+
+# Intercept
+
+```{r}
+# Fit models with animal-specific covariates
+model8 <- lmer(log_weight ~ taxon + log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model8)
+```
+
+```{r}
+anova(model8, model5, test = "Chisq")
+```
+
+p-value: 0.0002466
+model8 > model5 (include taxon)
+model8 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model9 <- lmer(log_weight ~ taxon + sex + log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model9)
+```
+
+```{r}
+anova(model9, model8, test = "Chisq")
+```
+
+p-value: 0.007209
+model9 > model8 (include taxon, sex)
+model9 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model10 <- lmer(log_weight ~ taxon + sex + birth_institution + log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model10)
+```
+
+```{r}
+anova(model10, model9, test = "Chisq")
+```
+
+p-value: 0.5324
+model9 > model10 (include taxon, sex)
+model9 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model11 <- lmer(log_weight ~ taxon + sex + birth_type + log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model11)
+```
+
+```{r}
+anova(model11, model9, test = "Chisq")
+```
+
+p-value: 0.0142
+model11 > model9 (include taxon, sex, birth_type)
+model11 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model12 <- lmer(log_weight ~ taxon + sex + birth_type + n_known_offspring + log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model12)
+```
+
+```{r}
+anova(model12, model11, test = "Chisq")
+```
+
+p-value: 0.1792
+model11 > model12 (include taxon, sex, birth_type)
+model11 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model13 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model13)
+```
+
+```{r}
+anova(model13, model11, test = "Chisq")
+```
+
+p-value: 0.007209
+model13 > model11 (include taxon, sex, birth_type, infant_lit_sz_if_preg)
+model13 has lower AIC/BIC
+
+# Log-Age
+
+```{r}
+# Fit models with animal-specific covariates
+model14 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model14)
+```
+
+```{r}
+anova(model14, model13, test = "Chisq")
+```
+
+p-value: < 2.2e-16
+model14 > model13 (include taxon)
+model14 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model15 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + log_age_at_wt_d:sex + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model15)
+```
+
+```{r}
+anova(model15, model14, test = "Chisq")
+```
+
+p-value: 0.4186
+model14 > model15 (include taxon)
+model14 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model16 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model16)
+```
+
+```{r}
+anova(model16, model14, test = "Chisq")
+```
+
+p-value: < 2.2e-16
+model16 > model14 (include taxon, birth_type)
+model16 has lower AIC/BIC
+
+# Age_category
+
+```{r}
+# Fit models with animal-specific covariates
+model17 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + age_category:taxon + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model17)
+```
+
+```{r}
+anova(model17, model16, test = "Chisq")
+```
+
+p-value: 0.5035
+model16 > model17 
+model16 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model18 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + age_category:sex + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model18)
+```
+
+```{r}
+anova(model18, model16, test = "Chisq")
+```
+
+p-value: 0.3941
+model16 > model18
+model16 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model19 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + age_category:birth_type + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model19)
+```
+
+```{r}
+anova(model19, model16, test = "Chisq")
+```
+
+p-value: 3.585e-05
+model19 > model16 (include birth_type)
+model19 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model20 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + age_category:birth_type + age_category:infant_lit_sz_if_preg + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model20)
+```
+
+```{r}
+anova(model20, model19, test = "Chisq")
+```
+
+p-value: 0.0422
+model20 > model19 (include birth_type, infant_lit_sz_if_preg)
+model20 has lower AIC/BIC
+
+# Preg_status
+
+```{r}
+# Fit models with animal-specific covariates
+model21 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + age_category:birth_type + age_category:infant_lit_sz_if_preg + preg_status:taxon + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model21)
+```
+
+```{r}
+anova(model21, model20, test = "Chisq")
+```
+
+p-value: 0.3561
+model20 > model21 
+model20 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model22 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + preg_status + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + age_category:birth_type + age_category:infant_lit_sz_if_preg + preg_status:birth_type + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model22)
+```
+
+```{r}
+anova(model22, model20, test = "Chisq")
+```
+
+p-value: 0.4755
+model20 > model22 
+model20 has lower AIC/BIC
+
+```{r}
+# Fit models with animal-specific covariates
+model23 <- lmer(log_weight ~ taxon + sex + birth_type + infant_lit_sz_if_preg + log_age_at_wt_d + age_category + log_age_at_wt_d:taxon + log_age_at_wt_d:birth_type + age_category:birth_type + age_category:infant_lit_sz_if_preg + (log_age_at_wt_d + age_category | name), data = lemurs3, REML = F)
+tidy(model23)
+```
+
+```{r}
+anova(model20, model23, test = "Chisq")
+```
+
+p-value: 0.464
+model23 > model20
+model23 has lower AIC/BIC
+
+- drop preg_status
+
+# Checking assumptions
+
+```{r}
+model23 %>%
+  augment() %>%
+  mutate(.std.resid = residuals(model23, scaled = T))
+```
+
+```{r}
+# residuals v fitted
+plot(model23, main = "Residuals vs. Fitted", xlab = "Fitted Values", ylab = "Residuals")
+# looks reasonable - there may be some nonlinearity based on the curvature for low fitted values 
+
+# checking the normality of residuals:
+qqnorm(resid(model23), main = "Q-Q Plot for the Residuals")
+
+# checking the normality of the random effects:
+qqnorm(ranef(model23)$name$`(Intercept)`, 
+       main="Q-Q Plot for the Random Intercept (Name)")
+```
+
